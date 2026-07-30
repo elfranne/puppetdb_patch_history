@@ -52,5 +52,10 @@ Rows imported before this version have no message, so their `effective_version` 
 younger than `report-ttl` can be dropped and rebuilt instead; see
 [example/INSTALL.md](example/INSTALL.md#upgrading-an-existing-archive).
 
+## [1.0.0] - 2026-07-29
+
+- Initial release.
+
 [Unreleased]: https://github.com/elfranne/puppetdb_patch_history/compare/1.1.0...HEAD
 [1.1.0]: https://github.com/elfranne/puppetdb_patch_history/compare/1.0.0...1.1.0
+[1.0.0]: https://github.com/elfranne/puppetdb_patch_history/releases/tag/1.0.0
