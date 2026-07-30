@@ -89,6 +89,7 @@ What it manages:
 | `postgresql::server::database` | The archive database |
 | `postgresql_psql` | Applies the archive schema as `postgres`, so `postgres` owns the tables |
 | `postgresql::server::grant` | Least-privilege access for both roles |
+| `postgresql_psql` (grants) | `SELECT` for `grafana_ro` on every relation in the schema, views included, and `ALTER DEFAULT PRIVILEGES` so later ones are covered |
 | `postgresql::server::pg_hba_rule` | `peer` for the importer, `hostssl`+`cert` for Grafana |
 | `postgresql::server::pg_ident_rule` | Maps the Grafana certificate CN to `grafana_ro` |
 | `archive` + `file` | Stages the release under `/var/cache/puppetdb_patch_history`, installs the binary as `/usr/local/bin/puppetdb_patch_history` |
@@ -108,14 +109,21 @@ profile::puppetdb_patch_history::oncalendar: 'hourly'
 include profile::puppetdb_patch_history
 ```
 
-`grafana_certname` is the only parameter without a default — it is the certname of your Grafana
-node, and it must match the CN of the Puppet agent certificate that node presents.
+Those first three parameters have no defaults, so the catalog fails until all of them are in
+hiera. That is deliberate:
+
+- `grafana_certname` is the certname of your Grafana node, and it must match the CN of the Puppet
+  agent certificate that node presents.
+- `version` is not defaulted, so upgrading is something you decide rather than something a `git
+  pull` on this repo does to you.
+- `checksum` is not defaulted either, because a download verified against nothing is not verified.
+  It has to be paired with `version` anyway — the two are only correct together.
 
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `grafana_certname` | *(required)* | Certname of the Grafana node, mapped to `grafana_ro` |
-| `version` | `'1.1.0'` | Release to install, as the git tag reads (no `v` prefix) |
-| `checksum` | `undef` | SHA-512 of the release tarball |
+| `version` | *(required)* | Release to install, as the git tag reads (no `v` prefix) |
+| `checksum` | *(required)* | SHA-512 of the release tarball, from the release's checksums file |
 | `puppetdb_url` | `'http://localhost:8080'` | PuppetDB base URL |
 | `containing_class` | `'^Patching_as_code'` | Regex limiting the import to patch runs |
 | `db_name` | `'patch_history'` | Archive database name |
@@ -168,8 +176,10 @@ level=INFO msg=done runs_imported=274 runs_already_present=0
   PostgreSQL instance PuppetDB already runs on rather than standing up a second one. It also has
   to be in the catalog regardless, because the `postgresql::server::*` defined types read its
   class variables.
-- **Set `checksum`.** It is optional only so the example applies without editing. Pin it to the
-  SHA-512 from the release's checksums file for anything real.
+- **`version` and `checksum` are required, not defaulted.** An unverified download is not worth
+  having, and a `version` default would mean this file decides when your hosts upgrade. Requiring
+  both also keeps them in step: a stale checksum against a bumped version fails the `archive`
+  resource loudly, which is the desired outcome.
 - **`ProtectSystem=full`, not `strict`.** `strict` would mount `/run` read-only, where the
   PostgreSQL socket lives. `full` still protects `/usr`, `/boot`, and `/etc`.
 
@@ -192,6 +202,15 @@ CA *and* have its CN listed in the map. A certificate from any other Puppet node
 same CA — authenticates as nothing and is rejected. Add a host by adding it to the map, not by
 opening a network range.
 
+### The rule order matters
+
+Both rules are set to `order` **`010`/`011`**, and the value is load-bearing.
+`postgresql::server::config` ships an `allow access to all users` rule at **order 100** —
+`host all all 0.0.0.0/0` with password authentication — and `host` matches SSL connections as well
+as plaintext ones. `pg_hba` is first-match-wins, so anything ordered below that rule is
+unreachable: PostgreSQL answers with a password challenge, and `grafana_ro` has no password by
+design. Keep these rules below 100 and above the module's own `001`–`004`.
+
 ### What each role is granted
 
 | Role | Granted | Deliberately absent |
@@ -204,8 +223,17 @@ because PostgreSQL requires it on any column named in an `INSERT ... RETURNING` 
 needs `USAGE` on the sequence because `patch_run.id` is a `bigserial`, so every insert calls
 `nextval()` — without that grant, imports fail at runtime rather than at deploy time.
 
-`grafana_ro` also gets `ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES`, so a table added by a
-future schema change is readable without waiting for the next Puppet run to reapply grants.
+`grafana_ro`'s `SELECT` is granted by a `postgresql_psql` resource rather than
+`postgresql::server::grant`. The module's `ALL TABLES IN SCHEMA` grant decides whether it still
+needs to run by asking `pg_tables` which relations lack the privilege, and **`pg_tables` does not
+list views** — so once the tables were granted it stopped firing, and the `patch_event` view added
+in 1.1.0 was left unreadable on any archive that gained it by upgrade. The replacement issues the
+same `GRANT` (which does cover views) but probes `pg_class`, so a view, materialised view or
+partitioned table added by a later schema change is picked up on the next run.
+
+`grafana_ro` also gets `ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES`, which covers objects
+created *after* it is set — the next schema addition, not one already in place. It is applied as
+`postgres`, the role that creates everything in this schema, so it needs no `FOR ROLE` clause.
 
 ### Check it
 
@@ -388,6 +416,36 @@ insert calls `nextval()`. This only ever shows up on the first insert, not at de
 **`certificate authentication failed for user "grafana_ro"`** — the certificate reached PostgreSQL
 and was signed by a CA it trusts, but its CN is not in the `pg_ident` map. Check that
 `grafana_certname` matches the CN the Grafana node actually presents.
+
+**`password authentication failed for user "grafana_ro"`**, with
+`DETAIL: User "grafana_ro" has no password assigned.` — this is not a credentials problem. The
+`hostssl ... cert` rule never matched, and an earlier password-authentication rule answered
+instead; the client certificate was never requested. Grafana reports only a generic
+``failed to connect to `user=grafana_ro database=patch_history` ``, so read the PostgreSQL log for
+the line above. Then dump the rules in order:
+
+```sh
+sudo grep -nE '^(host|hostssl|local)' /etc/postgresql/*/main/pg_hba.conf
+```
+
+The `hostssl patch_history grafana_ro` lines must appear **above** any `host all all 0.0.0.0/0`
+rule. If they do not, see [the rule order](#the-rule-order-matters). After fixing it,
+`systemctl reload postgresql` explicitly — reordering `concat` fragments does not reliably notify
+the service, so a Puppet run alone can leave the old file loaded.
+
+**`permission denied for view patch_event`** — the view exists but `grafana_ro` was never granted
+`SELECT` on it, which is what `postgresql::server::grant`'s `pg_tables` blind spot used to cause
+(see [what each role is granted](#what-each-role-is-granted)). The current profile fixes this on
+the next Puppet run. To repair an archive by hand:
+
+```sh
+sudo -u postgres psql -d patch_history \
+  -c 'GRANT SELECT ON ALL TABLES IN SCHEMA patch_history TO grafana_ro'
+```
+
+The dashboard works immediately afterwards — Grafana does not cache privileges. Confirm with
+`\dp patch_history.*`, which should show `grafana_ro=r/postgres` against the view as well as the
+two tables.
 
 **Grafana connects but sees no tables** — its queries are probably unqualified. The archive is in
 the `patch_history` schema, and `grafana_ro` has no rights in `public`, so queries need

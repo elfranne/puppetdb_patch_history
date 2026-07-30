@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +266,89 @@ func TestGrafanaDatasourceMatchesProfile(t *testing.T) {
 	keyBlock = keyBlock[:strings.Index(keyBlock, "\n  }")]
 	if !strings.Contains(keyBlock, `owner     => 'root'`) || !strings.Contains(keyBlock, `mode      => '0640'`) {
 		t.Error("the client key must be root-owned and 0640, or Grafana's driver refuses it")
+	}
+}
+
+// $version and $checksum are required on purpose: a download verified against nothing is
+// not verified, and a defaulted version would leave this repository deciding when a host
+// upgrades. They are also only correct as a pair, so a default on either is a regression.
+func TestReleaseParametersAreRequired(t *testing.T) {
+	pp := readFile(t, "example/puppetdb_patch_history.pp")
+
+	for _, param := range []string{"grafana_certname", "version", "checksum"} {
+		decl := regexp.MustCompile(`(?m)^\s+\S+\s+\$` + param + `\s*(=.*)?,$`).FindStringSubmatch(pp)
+		if decl == nil {
+			t.Errorf("the profile no longer declares a $%s parameter", param)
+			continue
+		}
+		if decl[1] != "" {
+			t.Errorf("$%s has a default (%s), but it must be required", param, strings.TrimSuffix(decl[1], ","))
+		}
+	}
+}
+
+// pg_hba is first-match-wins, and postgresql::server::config ships an 'allow access to
+// all users' rule at order 100: `host all all 0.0.0.0/0` with password auth, where
+// `host` matches SSL connections as well as plaintext ones. Ordered below that, the
+// Grafana rules never match — PostgreSQL answers with a password challenge and
+// grafana_ro has none, so the certificate is never requested.
+func TestGrafanaPgHbaRulesSortAboveTheCatchAll(t *testing.T) {
+	pp := readFile(t, "example/puppetdb_patch_history.pp")
+
+	// Close on "\n  }", not the first "}" — auth_option interpolates ${grafana_map}.
+	rules := regexp.MustCompile(`(?s)pg_hba_rule \{ "certificate access.*?\n  \}`).FindAllString(pp, -1)
+	if len(rules) != 2 {
+		t.Fatalf("found %d Grafana pg_hba rules in the profile, want 2 (ipv4 and ipv6)", len(rules))
+	}
+
+	order := regexp.MustCompile(`order\s+=>\s+'?(\d+)'?`)
+	for _, rule := range rules {
+		m := order.FindStringSubmatch(rule)
+		if m == nil {
+			t.Error("a Grafana pg_hba rule sets no order, so it takes the module default of 150 — below the catch-all")
+			continue
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil || n >= 100 {
+			t.Errorf("Grafana pg_hba rule has order %q; it must sort below the order-100 catch-all", m[1])
+		}
+	}
+}
+
+// postgresql::server::grant's ALL TABLES IN SCHEMA idempotency check asks pg_tables
+// which relations lack the privilege, and pg_tables does not list views. Once the two
+// tables were granted it stopped firing, so patch_event was never covered and every
+// panel in dashboard.json failed with "permission denied for view patch_event". The
+// grant has to probe something that counts views.
+func TestGrafanaSelectGrantCoversViews(t *testing.T) {
+	pp := readFile(t, "example/puppetdb_patch_history.pp")
+
+	if strings.Contains(pp, `postgresql::server::grant { "select on ${db_schema} tables for ${grafana_user}"`) {
+		t.Error("the read-only SELECT grant is back on postgresql::server::grant, whose ALL TABLES check ignores views")
+	}
+
+	grant := regexp.MustCompile(`(?s)postgresql_psql \{ "select on \$\{db_schema\} relations for \$\{grafana_user\}".*?\n  \}`).FindString(pp)
+	if grant == "" {
+		t.Fatal("the profile no longer grants SELECT on the schema's relations to $grafana_user")
+	}
+	for _, want := range []string{"pg_class", "relkind", "has_table_privilege"} {
+		if !strings.Contains(grant, want) {
+			t.Errorf("the SELECT grant's unless probe does not mention %q, so it may not count views", want)
+		}
+	}
+}
+
+// INSTALL.md promised ALTER DEFAULT PRIVILEGES long before the profile had it, which is
+// how a view shipped unreadable: the documented safety net for objects added by a later
+// schema change did not exist. Keep the claim and the resource together.
+func TestDocumentedDefaultPrivilegesExist(t *testing.T) {
+	const claim = "ALTER DEFAULT PRIVILEGES"
+
+	if !strings.Contains(readFile(t, "example/INSTALL.md"), claim) {
+		t.Skip("INSTALL.md no longer documents default privileges")
+	}
+	if !strings.Contains(readFile(t, "example/puppetdb_patch_history.pp"), claim) {
+		t.Errorf("INSTALL.md documents %s for the read-only role, but the profile does not set it", claim)
 	}
 }
 
