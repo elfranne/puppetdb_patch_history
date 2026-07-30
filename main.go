@@ -78,6 +78,18 @@ func (c config) validate() error {
 // old_value and new_value are kept raw because package providers are not
 // consistent about their shape: usually a version string, sometimes "absent",
 // sometimes an array of candidate versions, sometimes null.
+//
+// Message is the agent's log line for the change, and it is not redundant with
+// new_value. new_value is the *desired* value from the catalog, so a resource
+// declared `ensure => latest` - which is how patching_as_code declares them -
+// reports the literal string "latest" and no version at all. The version the
+// provider actually installed appears only in the message:
+//
+//	ensure changed '10.0.301' to '10.0.302' (corrective)
+//
+// It is stored verbatim and parsed in the patch_event view rather than here, so
+// that a provider whose message reads differently can be accommodated by
+// replacing the view instead of by re-importing data PuppetDB no longer has.
 type event struct {
 	Certname          string          `json:"certname"`
 	Report            string          `json:"report"`
@@ -86,6 +98,7 @@ type event struct {
 	Resource          string          `json:"resource_title"`
 	OldValue          json.RawMessage `json:"old_value"`
 	NewValue          json.RawMessage `json:"new_value"`
+	Message           json.RawMessage `json:"message"`
 	Status            string          `json:"status"`
 }
 
@@ -93,6 +106,7 @@ type pkg struct {
 	name       string
 	oldVersion string
 	newVersion string
+	message    string
 	status     string
 }
 
@@ -244,7 +258,7 @@ func watermark(ctx context.Context, conn *pgx.Conn, cfg config) (time.Time, erro
 func buildPQL(cfg config, since time.Time, offset int) string {
 	var b strings.Builder
 
-	b.WriteString(`events[certname, report, run_start_time, report_receive_time, resource_title, old_value, new_value, status] { `)
+	b.WriteString(`events[certname, report, run_start_time, report_receive_time, resource_title, old_value, new_value, message, status] { `)
 	b.WriteString(`resource_type = "Package" and property = "ensure" `)
 	b.WriteString(`and (status = "success" or status = "failure") `)
 
@@ -350,6 +364,7 @@ func groupByReport(events []event) []*patchRun {
 			name:       e.Resource,
 			oldVersion: normalizeValue(e.OldValue),
 			newVersion: normalizeValue(e.NewValue),
+			message:    normalizeValue(e.Message),
 			status:     e.Status,
 		})
 	}
@@ -407,10 +422,14 @@ func insertRun(ctx context.Context, conn *pgx.Conn, r *patchRun) (bool, error) {
 	// "patch_history"."patch_package".
 	_, err = tx.CopyFrom(ctx,
 		pgx.Identifier{schemaName, "patch_package"},
-		[]string{"run_id", "package", "old_version", "new_version", "status"},
+		[]string{"run_id", "package", "old_version", "new_version", "message", "status"},
 		pgx.CopyFromSlice(len(r.packages), func(i int) ([]any, error) {
 			p := r.packages[i]
-			return []any{runID, p.name, nullable(p.oldVersion), nullable(p.newVersion), p.status}, nil
+			return []any{
+				runID, p.name,
+				nullable(p.oldVersion), nullable(p.newVersion), nullable(p.message),
+				p.status,
+			}, nil
 		}),
 	)
 	if err != nil {

@@ -44,6 +44,9 @@ and the profile is what puts them there.
 To read the archive from Grafana, [`example/grafana.pp`](example/grafana.pp) provisions it as a
 read-only PostgreSQL datasource on the Grafana node. It needs no password — the connection is
 authenticated by that node's Puppet agent certificate.
+[`example/dashboard.json`](example/dashboard.json) is a dashboard to import against it: patch
+volume over time, version rollout, least-recently-patched nodes, and failures with the provider's
+error text.
 
 Prebuilt Linux tarballs (`amd64`, `386`, `arm64`, `arm` v5/v6/v7) are attached to each
 [release](https://github.com/elfranne/puppetdb_patch_history/releases) with SHA-512 checksums —
@@ -174,7 +177,8 @@ thing that fills it.
 | `run_id` | References `patch_run(id)`, `ON DELETE CASCADE` |
 | `package` | The Puppet resource title |
 | `old_version` | Version before the change; the literal string `absent` for a newly installed package |
-| `new_version` | Version after the change; the literal string `absent` if the package was removed |
+| `new_version` | The value **from the catalog**, not the outcome — see below. `absent` if the package was removed |
+| `message` | The agent's log line for the change. Carries the version actually installed, and the provider's error text on a failure |
 | `status` | `success` or `failure` — **failed patches are archived deliberately** |
 
 Version values are stored as PuppetDB reports them. Package providers are inconsistent: usually a
@@ -186,53 +190,97 @@ Only a JSON `null` from PuppetDB becomes SQL `NULL`; `absent` is stored as text.
 "packages that were newly installed" therefore wants `old_version = 'absent'`, not
 `old_version IS NULL`.
 
+### `new_version` is usually the literal string `latest`
+
+A resource event records the **desired value from the catalog**, not the result. `patching_as_code`
+declares its packages `ensure => latest`, so almost every row it produces has `new_version =
+'latest'` and no version at all. That is what Puppet reported, and it is stored verbatim.
+
+The version that was actually installed appears only in the agent's message:
+
+```text
+ensure changed '10.0.301' to '10.0.302' (corrective)
+```
+
+so `message` is not redundant with `new_version` — it is the only record of the outcome. On a
+failed event it holds the provider's error instead, which is the only account of *why* a patch did
+not apply.
+
+### `patch_event` — the view you should query
+
+Parsing the message is left to a view rather than done at import time, so that a provider whose
+message reads differently can be accommodated with `CREATE OR REPLACE VIEW` instead of a re-import
+of data PuppetDB no longer has.
+
+`patch_event` joins the two tables and adds two derived columns:
+
+| Column | Notes |
+| --- | --- |
+| `new_version_resolved` | The version parsed out of `message`, or `NULL` when there is nothing to parse — a failed event, or a row imported before `message` was collected |
+| `effective_version` | `new_version_resolved`, falling back to `new_version`. What to display |
+
+Everything else on the view is passed through from `patch_run` and `patch_package` unchanged. The
+bundled dashboard reads this view exclusively.
+
 ## Example queries
+
+These read `patch_event`, so versions come out resolved rather than as `latest`.
 
 Recent patch activity on one node:
 
 ```sql
-SELECT r.run_at, p.package, p.old_version, p.new_version, p.status
-FROM patch_history.patch_run r
-JOIN patch_history.patch_package p ON p.run_id = r.id
-WHERE r.certname = 'web01.example.com'
-ORDER BY r.run_at DESC
+SELECT run_at, package, old_version, effective_version, status
+FROM patch_history.patch_event
+WHERE certname = 'web01.example.com'
+ORDER BY run_at DESC
 LIMIT 50;
 ```
 
 Which hosts received a specific package version, and when:
 
 ```sql
-SELECT r.certname, min(r.run_at) AS first_seen
-FROM patch_history.patch_run r
-JOIN patch_history.patch_package p ON p.run_id = r.id
-WHERE p.package = 'openssl'
-  AND p.new_version LIKE '3.0.13%'
-GROUP BY r.certname
+SELECT certname, min(run_at) AS first_seen
+FROM patch_history.patch_event
+WHERE package = 'openssl'
+  AND effective_version LIKE '3.0.13%'
+GROUP BY certname
 ORDER BY first_seen;
 ```
 
-Packages that failed to patch in the last 30 days:
+Matching on `new_version` here would find nothing: with `ensure => latest` that column is the
+string `latest` on every row.
+
+Why a patch failed, most recent first:
 
 ```sql
-SELECT r.certname, p.package, p.old_version, p.new_version, max(r.run_at) AS last_failure
-FROM patch_history.patch_run r
-JOIN patch_history.patch_package p ON p.run_id = r.id
-WHERE p.status = 'failure'
-  AND r.run_at > now() - interval '30 days'
-GROUP BY r.certname, p.package, p.old_version, p.new_version
+SELECT certname, package, old_version, message, max(run_at) AS last_failure
+FROM patch_history.patch_event
+WHERE status = 'failure'
+  AND run_at > now() - interval '30 days'
+GROUP BY certname, package, old_version, message
 ORDER BY last_failure DESC;
 ```
 
 Patch volume per month:
 
 ```sql
-SELECT date_trunc('month', r.run_at) AS month,
-       count(DISTINCT r.certname) AS nodes,
-       count(*)                   AS packages
-FROM patch_history.patch_run r
-JOIN patch_history.patch_package p ON p.run_id = r.id
+SELECT date_trunc('month', run_at) AS month,
+       count(DISTINCT certname)    AS nodes,
+       count(*)                    AS packages
+FROM patch_history.patch_event
 GROUP BY month
 ORDER BY month DESC;
+```
+
+Updates whose version could not be determined — unparsable messages, or rows predating the
+`message` column:
+
+```sql
+SELECT certname, package, run_at, message
+FROM patch_history.patch_event
+WHERE status = 'success'
+  AND new_version_resolved IS NULL
+ORDER BY run_at DESC;
 ```
 
 ## Limitations

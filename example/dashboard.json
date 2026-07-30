@@ -1,0 +1,661 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Package updates archived out of PuppetDB by puppetdb_patch_history. Everything reads the patch_history.patch_event view, which resolves patching_as_code's `ensure => latest` back to the version actually installed. Panels are bounded by the dashboard time range on run_at, and by the Node, Package and Status filters.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "Overview",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "One row per package changed in a run. A package updated on fifty nodes counts fifty times.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "text", "mode": "fixed" },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"Package updates\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status   ~ '^(${status:regex})$';",
+          "refId": "A"
+        }
+      ],
+      "title": "Package updates",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "Distinct certnames that changed at least one package in the range. A node with nothing to patch never appears in this archive at all.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "text", "mode": "fixed" },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "id": 2,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(DISTINCT e.certname) AS \"Nodes patched\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status   ~ '^(${status:regex})$';",
+          "refId": "A"
+        }
+      ],
+      "title": "Nodes patched",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "Puppet runs that changed at least one package. One row per report hash.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "text", "mode": "fixed" },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "id": 3,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(DISTINCT e.run_id) AS \"Patch runs\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status   ~ '^(${status:regex})$';",
+          "refId": "A"
+        }
+      ],
+      "title": "Patch runs",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "Package updates recorded with status 'failure'. This panel ignores the Status filter deliberately - it is always about failures.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"Failed updates\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status = 'failure';",
+          "refId": "A"
+        }
+      ],
+      "title": "Failed updates",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "panels": [],
+      "title": "Over time",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "Package updates per day, split by outcome. Bucketed on run_at, so a run is counted on the day it started.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Succeeded" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failed" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 5,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(e.run_at, '1d'),\n       count(*) FILTER (WHERE e.status = 'success') AS \"Succeeded\",\n       count(*) FILTER (WHERE e.status = 'failure') AS \"Failed\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status   ~ '^(${status:regex})$'\nGROUP BY 1\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Package updates per day",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "Distinct nodes that changed at least one package that day. Patch windows show up here as spikes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "blue", "mode": "fixed" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 6,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": false },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(e.run_at, '1d'),\n       count(DISTINCT e.certname) AS \"Nodes\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status   ~ '^(${status:regex})$'\nGROUP BY 1\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Nodes patched per day",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102,
+      "panels": [],
+      "title": "Packages",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "The fifteen most frequently updated packages in the range, counted once per node per run.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-blues" },
+          "mappings": [],
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 10, "w": 9, "x": 0, "y": 15 },
+      "id": 7,
+      "options": {
+        "displayMode": "basic",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "left",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": [], "fields": "/^Updates$/", "values": true },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "text"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT e.package AS \"Package\",\n       count(*)  AS \"Updates\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status   ~ '^(${status:regex})$'\nGROUP BY 1\nORDER BY 2 DESC\nLIMIT 15;",
+          "refId": "A"
+        }
+      ],
+      "title": "Most updated packages",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "Which version of a package landed where, and when it first and last appeared. The version is effective_version, parsed out of the agent's message - patching_as_code asks for `ensure => latest`, so the catalog value alone would say nothing. Rows still reading 'latest' are excluded: those are events whose message could not be parsed, or which predate the message column. Version strings are stored exactly as reported, so this sorts by time, not by version.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Nodes" },
+            "properties": [{ "id": "custom.width", "value": 90 }]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 15, "x": 9, "y": 15 },
+      "id": 8,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Last seen" }]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT e.package           AS \"Package\",\n       e.effective_version AS \"Version\",\n       count(DISTINCT e.certname) AS \"Nodes\",\n       min(e.run_at)       AS \"First seen\",\n       max(e.run_at)       AS \"Last seen\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status   ~ '^(${status:regex})$'\n  AND e.effective_version IS NOT NULL\n  AND e.effective_version NOT IN ('absent', 'latest')\nGROUP BY 1, 2\nORDER BY 5 DESC\nLIMIT 500;",
+          "refId": "A"
+        }
+      ],
+      "title": "Version rollout",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "id": 103,
+      "panels": [],
+      "title": "Nodes",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "Oldest patch activity first. Only nodes that changed a package inside the time range appear - an absent node either had nothing to patch or was not patched, and this archive cannot tell those apart. Use PuppetDB's node report_timestamp for that. 'Days ago' is measured from now, not from the end of the range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Days ago" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "custom.width", "value": 110 },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 45 },
+                    { "color": "red", "value": 90 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Package updates" },
+            "properties": [{ "id": "custom.width", "value": 150 }]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 26 },
+      "id": 9,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Days ago" }]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT e.certname    AS \"Node\",\n       max(e.run_at) AS \"Last patched\",\n       floor(extract(epoch FROM now() - max(e.run_at)) / 86400)::int AS \"Days ago\",\n       count(*)      AS \"Package updates\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status   ~ '^(${status:regex})$'\nGROUP BY 1\nORDER BY 2 ASC\nLIMIT 500;",
+          "refId": "A"
+        }
+      ],
+      "title": "Nodes by last patch",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "Package updates Puppet reported as failed, with the provider's own error text. Identical failures collapse into one row with a count. There is no 'to' version: the attempt never completed, so the only target ever recorded is the catalog's 'latest'. This panel ignores the Status filter deliberately.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Attempts" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "custom.width", "value": 100 },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "text", "value": null },
+                    { "color": "red", "value": 3 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Message" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "auto", "wrapText": true } },
+              { "id": "custom.minWidth", "value": 260 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 26 },
+      "id": 10,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Last failure" }]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT e.certname    AS \"Node\",\n       e.package     AS \"Package\",\n       e.old_version AS \"From\",\n       e.message     AS \"Message\",\n       count(*)      AS \"Attempts\",\n       max(e.run_at) AS \"Last failure\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status = 'failure'\nGROUP BY 1, 2, 3, 4\nORDER BY 6 DESC\nLIMIT 500;",
+          "refId": "A"
+        }
+      ],
+      "title": "Failed updates",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "id": 104,
+      "panels": [],
+      "title": "Detail",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+      "description": "The archive, newest first, capped at 500 rows - narrow the time range or the filters rather than raising the limit. 'To' is effective_version: the version parsed from the agent's message, falling back to the catalog's value when there is no message to parse. 'absent' means the package was installed or removed, and a comma-separated list is a provider offering several candidate versions.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "custom.width", "value": 100 },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "failure": { "color": "red", "index": 1, "text": "failure" },
+                      "success": { "color": "green", "index": 0, "text": "success" }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Run at" },
+            "properties": [{ "id": "custom.width", "value": 190 }]
+          }
+        ]
+      },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 37 },
+      "id": 11,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Run at" }]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT e.run_at            AS \"Run at\",\n       e.certname          AS \"Node\",\n       e.package           AS \"Package\",\n       e.old_version       AS \"From\",\n       e.effective_version AS \"To\",\n       e.status            AS \"Status\"\nFROM patch_history.patch_event e\nWHERE $__timeFilter(e.run_at)\n  AND e.certname ~ '^(${certname:regex})$'\n  AND e.package  ~ '^(${package:regex})$'\n  AND e.status   ~ '^(${status:regex})$'\nORDER BY e.run_at DESC, e.certname, e.package\nLIMIT 500;",
+          "refId": "A"
+        }
+      ],
+      "title": "Patch activity",
+      "type": "table"
+    }
+  ],
+  "preload": false,
+  "refresh": "15m",
+  "schemaVersion": 39,
+  "tags": ["puppet", "patching"],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+        "definition": "SELECT DISTINCT certname FROM patch_history.patch_run ORDER BY 1;",
+        "description": "Certnames present anywhere in the archive, not only in the current time range.",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Node",
+        "multi": true,
+        "name": "certname",
+        "options": [],
+        "query": "SELECT DISTINCT certname FROM patch_history.patch_run ORDER BY 1;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "puppetdb-patch-history" },
+        "definition": "SELECT DISTINCT package FROM patch_history.patch_package ORDER BY 1;",
+        "description": "Every package name the archive has ever recorded.",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Package",
+        "multi": true,
+        "name": "package",
+        "options": [],
+        "query": "SELECT DISTINCT package FROM patch_history.patch_package ORDER BY 1;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "description": "The two outcomes the importer records. The 'Failed updates' panels ignore this filter.",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Status",
+        "multi": true,
+        "name": "status",
+        "options": [
+          { "selected": true, "text": "All", "value": "$__all" },
+          { "selected": false, "text": "success", "value": "success" },
+          { "selected": false, "text": "failure", "value": "failure" }
+        ],
+        "query": "success,failure",
+        "skipUrlSync": false,
+        "type": "custom"
+      }
+    ]
+  },
+  "time": { "from": "now-90d", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Patch history",
+  "uid": "patch-history",
+  "version": 1,
+  "weekStart": ""
+}
