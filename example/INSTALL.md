@@ -10,6 +10,8 @@ port, and its default connection string is a local unix socket.
 - [Deploying with Puppet](#deploying-with-puppet)
 - [Read-only access for Grafana](#read-only-access-for-grafana)
 - [The Grafana datasource](#the-grafana-datasource)
+- [The dashboard](#the-dashboard)
+- [Upgrading an existing archive](#upgrading-an-existing-archive)
 - [Troubleshooting](#troubleshooting)
 
 ## Prerequisite: PostgreSQL SSL
@@ -97,7 +99,7 @@ What it manages:
 ```yaml
 # data/nodes/puppetdb.example.com.yaml
 profile::puppetdb_patch_history::grafana_certname: 'grafana.example.com'
-profile::puppetdb_patch_history::version: '0.1.0'
+profile::puppetdb_patch_history::version: '1.1.0'
 profile::puppetdb_patch_history::checksum: '<sha512 from the release checksums file>'
 profile::puppetdb_patch_history::oncalendar: 'hourly'
 ```
@@ -112,7 +114,7 @@ node, and it must match the CN of the Puppet agent certificate that node present
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `grafana_certname` | *(required)* | Certname of the Grafana node, mapped to `grafana_ro` |
-| `version` | `'0.1.0'` | Release to install, as the git tag reads (no `v` prefix) |
+| `version` | `'1.1.0'` | Release to install, as the git tag reads (no `v` prefix) |
 | `checksum` | `undef` | SHA-512 of the release tarball |
 | `puppetdb_url` | `'http://localhost:8080'` | PuppetDB base URL |
 | `containing_class` | `'^Patching_as_code'` | Regex limiting the import to patch runs |
@@ -303,11 +305,81 @@ with `puppetserver ca sign --allow-alt-names`. A SAN has been mandatory for a we
 certificate for years; this is worth correcting at the source rather than working around at the
 client.
 
+## The dashboard
+
+[`dashboard.json`](dashboard.json) is a ready-made dashboard for the archive. Import it through
+**Dashboards → New → Import** and pick the datasource when prompted.
+
+Every query reads the `patch_history.patch_event` view rather than the tables, so versions come out
+resolved instead of as `latest`. It will not work against an archive whose schema predates the
+view — apply the profile first.
+
+The datasource UID in the file is `puppetdb-patch-history`, matching `grafana.pp`'s
+`datasource_uid` default. If you changed that parameter, or created the datasource by hand in the
+UI rather than provisioning it, the UID will not match and every panel will fail to resolve its
+datasource — the visible symptom is empty variable dropdowns. Either set `datasource_uid` to the
+UID Grafana generated, or replace the UID throughout the JSON:
+
+```sh
+sed -i 's/puppetdb-patch-history/<your-datasource-uid>/g' dashboard.json
+```
+
+The dashboard's own `uid`, `patch-history`, is deliberately different and should be left alone: it
+is what makes a re-import update the existing dashboard instead of creating a second copy.
+
+## Upgrading an existing archive
+
+The schema gained a `message` column and the `patch_event` view. The DDL in the profile handles
+both — `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` and `CREATE OR REPLACE VIEW` — but two things
+need attention.
+
+**The `unless` probe moved.** It now tests for the `patch_event` view, because it has to name the
+last object the DDL creates. Had it stayed on the old index, an existing archive would report the
+schema as already applied and silently skip everything added after it. If you carry a modified copy
+of the profile, carry this across too.
+
+**Rows imported before the upgrade have no message**, so their `new_version_resolved` is `NULL` and
+`effective_version` falls back to `latest`. Nothing can fill them in: PuppetDB has expired the
+reports they came from. To find them:
+
+```sql
+SELECT count(*) FROM patch_history.patch_event
+WHERE status = 'success' AND new_version_resolved IS NULL;
+```
+
+If the archive is younger than your `report-ttl` — 14 days by default — everything in it is still
+in PuppetDB, and starting over gets you resolved versions for the whole history. On the PuppetDB
+host:
+
+```sh
+systemctl stop puppetdb-patch-history.timer
+sudo -u postgres psql -c 'DROP DATABASE patch_history'
+puppet agent -t                                    # recreates the database and applies the schema
+systemctl start puppetdb-patch-history.service     # backfills 30 days by default
+```
+
+Check `report-ttl` first. Anything PuppetDB has already expired does not come back, and this is one
+of the few ways to lose archive data on purpose.
+
 ## Troubleshooting
 
 **`archive schema is missing`** — the schema has not been applied to this database. Under Puppet
 that is the `postgresql_psql` resource in the profile, which applies it on the first run. The
 importer never creates its own tables.
+
+**`relation "patch_history.patch_event" does not exist`** — the view has not been created. On an
+archive that predates it, check that the profile's `$schema_applied` probe tests for `patch_event`
+and not for an earlier object; if it still names the old index, the whole DDL is being skipped as
+already applied. See [Upgrading an existing archive](#upgrading-an-existing-archive).
+
+**Every `new_version` reads `latest`** — that is correct, and not a bug. It is the value from the
+catalog, and `patching_as_code` declares its packages `ensure => latest`. Query `patch_event` and
+read `effective_version` for the version that was actually installed.
+
+**`effective_version` also reads `latest`** — there was no message to parse. Either the row was
+imported before the `message` column existed, or the event failed and carries an error instead of
+an `ensure changed 'a' to 'b'` line. `new_version_resolved IS NULL` distinguishes them from rows
+that parsed cleanly.
 
 **`permission denied for sequence patch_run_id_seq`** — the importer is missing
 `GRANT USAGE ON ALL SEQUENCES IN SCHEMA patch_history`. `patch_run.id` is a `bigserial`, so every

@@ -37,7 +37,7 @@ func TestBuildPQL(t *testing.T) {
 	got := buildPQL(cfg, since, 1000)
 
 	for _, want := range []string{
-		`events[certname, report, run_start_time, report_receive_time, resource_title, old_value, new_value, status]`,
+		`events[certname, report, run_start_time, report_receive_time, resource_title, old_value, new_value, message, status]`,
 		`resource_type = "Package"`,
 		`property = "ensure"`,
 		`(status = "success" or status = "failure")`,
@@ -62,7 +62,7 @@ func TestBuildPQLIsWellFormed(t *testing.T) {
 	since := time.Date(2026, 6, 28, 7, 41, 2, 0, time.UTC)
 
 	const want = `events[certname, report, run_start_time, report_receive_time, ` +
-		`resource_title, old_value, new_value, status] { resource_type = "Package" ` +
+		`resource_title, old_value, new_value, message, status] { resource_type = "Package" ` +
 		`and property = "ensure" and (status = "success" or status = "failure") ` +
 		`and report_receive_time >= "2026-06-28T07:41:02Z" ` +
 		`and containing_class ~ "^Patching_as_code" ` +
@@ -173,11 +173,42 @@ func TestProfileSchemaMatchesQueries(t *testing.T) {
 		}
 	}
 
+	// Every column the importer copies into patch_package has to exist in the DDL.
+	// A column added to the CopyFrom list and forgotten here fails on the first
+	// insert at runtime, not at deploy time.
+	start := strings.Index(ddl, "CREATE TABLE IF NOT EXISTS ${db_schema}.patch_package")
+	if start < 0 {
+		t.Fatal("could not find the patch_package table in the DDL")
+	}
+	end := strings.Index(ddl[start:], ");")
+	if end < 0 {
+		t.Fatal("could not find the end of the patch_package table in the DDL")
+	}
+	columns := ddl[start : start+end]
+	for _, col := range []string{"run_id", "package", "old_version", "new_version", "message", "status"} {
+		if !strings.Contains(columns, col) {
+			t.Errorf("patch_package has no %q column, but the importer writes one", col)
+		}
+	}
+
+	// The view is what turns `ensure => latest` back into a version, and it is what
+	// the dashboard and the documented queries read.
+	if !strings.Contains(ddl, "CREATE OR REPLACE VIEW ${db_schema}.patch_event") {
+		t.Error("the profile does not create the patch_event view")
+	}
+
 	// The parameter default has to match the constant, or the profile would build
 	// an archive the importer cannot find.
 	pp := readFile(t, "example/puppetdb_patch_history.pp")
 	if !strings.Contains(pp, `$db_schema          = '`+schemaName+`'`) {
 		t.Errorf("the profile's $db_schema default does not match schemaName %q", schemaName)
+	}
+
+	// The probe has to name the last object the DDL creates. Left pointing at an
+	// earlier one, an existing archive reports the schema as applied and quietly
+	// skips everything added after it.
+	if !strings.Contains(pp, `AND viewname = 'patch_event'`) {
+		t.Error("the $schema_applied probe does not test for the last object the DDL creates")
 	}
 }
 
@@ -358,7 +389,8 @@ func TestGroupByReport(t *testing.T) {
 
 	events := []event{
 		{Certname: "web01", Report: "aaa", RunStartTime: first, ReportReceiveTime: firstRecv, Resource: "openssl",
-			OldValue: json.RawMessage(`"3.0.11"`), NewValue: json.RawMessage(`"3.0.13"`), Status: "success"},
+			OldValue: json.RawMessage(`"3.0.11"`), NewValue: json.RawMessage(`"3.0.13"`),
+			Message: json.RawMessage(`"ensure changed '3.0.11' to '3.0.13'"`), Status: "success"},
 		{Certname: "db01", Report: "bbb", RunStartTime: second, ReportReceiveTime: secondRecv, Resource: "vim",
 			NewValue: json.RawMessage(`"9.1.0"`), Status: "success"},
 		// Same run as the first event: must land in the same patchRun.
@@ -395,7 +427,10 @@ func TestGroupByReport(t *testing.T) {
 	if len(runs[0].packages) != 2 {
 		t.Fatalf("run aaa has %d packages, want 2", len(runs[0].packages))
 	}
-	want := pkg{name: "openssl", oldVersion: "3.0.11", newVersion: "3.0.13", status: "success"}
+	want := pkg{
+		name: "openssl", oldVersion: "3.0.11", newVersion: "3.0.13",
+		message: "ensure changed '3.0.11' to '3.0.13'", status: "success",
+	}
 	if runs[0].packages[0] != want {
 		t.Errorf("package 0 = %+v, want %+v", runs[0].packages[0], want)
 	}
@@ -410,6 +445,51 @@ func TestGroupByReport(t *testing.T) {
 				t.Error("event without a report hash was imported")
 			}
 		}
+	}
+}
+
+// The case the message column exists for. patching_as_code declares its packages
+// `ensure => latest`, and PuppetDB reports the catalog's desired value - so
+// new_value is the literal string "latest" on every row, and the version that was
+// actually installed is only in the message. Both are kept: new_version is what
+// Puppet was asked for, message is what happened.
+func TestGroupByReportKeepsMessageForEnsureLatest(t *testing.T) {
+	events := []event{{
+		Certname: "web01", Report: "aaa", Resource: "dotnet-sdk",
+		OldValue: json.RawMessage(`"10.0.301"`),
+		NewValue: json.RawMessage(`"latest"`),
+		Message:  json.RawMessage(`"ensure changed '10.0.301' to '10.0.302' (corrective)"`),
+		Status:   "success",
+	}}
+
+	runs := groupByReport(events)
+	if len(runs) != 1 || len(runs[0].packages) != 1 {
+		t.Fatalf("got %d runs, want 1 with 1 package", len(runs))
+	}
+
+	p := runs[0].packages[0]
+	if p.newVersion != "latest" {
+		t.Errorf("newVersion = %q, want the catalog's %q verbatim", p.newVersion, "latest")
+	}
+	if !strings.Contains(p.message, "10.0.302") {
+		t.Errorf("message does not carry the installed version: %q", p.message)
+	}
+}
+
+// A failed event's message is the provider's error text, not "ensure changed".
+// It is still stored: it is the only account of why the patch did not apply.
+func TestGroupByReportKeepsFailureMessages(t *testing.T) {
+	events := []event{{
+		Certname: "web01", Report: "aaa", Resource: "openssl",
+		OldValue: json.RawMessage(`"3.0.11"`),
+		NewValue: json.RawMessage(`"latest"`),
+		Message:  json.RawMessage(`"Could not update: Execution of '/usr/bin/apt-get' returned 100"`),
+		Status:   "failure",
+	}}
+
+	p := groupByReport(events)[0].packages[0]
+	if !strings.Contains(p.message, "returned 100") {
+		t.Errorf("failure message was not preserved: %q", p.message)
 	}
 }
 

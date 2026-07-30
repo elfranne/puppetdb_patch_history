@@ -24,7 +24,7 @@
 # @param grafana_clientcert pg_hba clientcert mode; use '1' on PostgreSQL < 12.
 class profile::puppetdb_patch_history (
   String[1]            $grafana_certname,
-  String[1]            $version            = '0.1.0',
+  String[1]            $version            = '1.1.0',
   Optional[String[1]]  $checksum           = undef,
   Stdlib::HTTPUrl      $puppetdb_url       = 'http://localhost:8080',
   String[1]            $containing_class   = '^Patching_as_code',
@@ -124,19 +124,59 @@ class profile::puppetdb_patch_history (
         package     text   NOT NULL,
         old_version text,
         new_version text,
+        message     text,
         status      text   NOT NULL
     );
+
+    -- For archives created before message was collected. Those rows stay as they
+    -- are: nothing can give them a message now, because PuppetDB expired the reports
+    -- they came from long ago.
+    ALTER TABLE ${db_schema}.patch_package ADD COLUMN IF NOT EXISTS message text;
 
     CREATE INDEX IF NOT EXISTS patch_package_run_idx
         ON ${db_schema}.patch_package (run_id);
 
     CREATE INDEX IF NOT EXISTS patch_package_name_version_idx
         ON ${db_schema}.patch_package (package, new_version);
+
+    -- What you should query, and what the dashboard reads.
+    --
+    -- new_version is the value from the catalog, not the outcome. patching_as_code
+    -- declares its packages `ensure => latest`, so every row it produces carries the
+    -- literal string "latest" and no version at all; the version the provider really
+    -- installed appears only in the agent's message:
+    --
+    --     ensure changed '10.0.301' to '10.0.302' (corrective)
+    --
+    -- Parsing that here rather than in the importer keeps the archive a verbatim copy
+    -- of what PuppetDB said. A provider whose message reads differently is then a
+    -- CREATE OR REPLACE away, instead of a re-import of data PuppetDB no longer has.
+    --
+    -- A failed event carries the provider's error text instead, matches nothing, and
+    -- resolves to NULL - which is why this is a fallback in coalesce below and not a
+    -- replacement for new_version.
+    CREATE OR REPLACE VIEW ${db_schema}.patch_event AS
+    SELECT r.id                AS run_id,
+           r.certname,
+           r.report_hash,
+           r.run_at,
+           r.report_received_at,
+           p.package,
+           p.old_version,
+           p.new_version,
+           substring(p.message from ' to ''([^'']*)''') AS new_version_resolved,
+           coalesce(substring(p.message from ' to ''([^'']*)'''), p.new_version)
+                               AS effective_version,
+           p.status,
+           p.message
+    FROM ${db_schema}.patch_run r
+    JOIN ${db_schema}.patch_package p ON p.run_id = r.id;
     | SQL
 
-  # Every statement is IF NOT EXISTS, so re-applying is harmless. The unless probes
-  # the last object created, so a partial apply is retried on the next run.
-  $schema_applied = "SELECT 1 FROM pg_indexes WHERE schemaname = '${db_schema}' AND indexname = 'patch_package_name_version_idx'" # lint:ignore:140chars
+  # Every statement is idempotent - IF NOT EXISTS, or CREATE OR REPLACE - so
+  # re-applying is harmless. The unless probes the last object created, so a partial
+  # apply is retried on the next run.
+  $schema_applied = "SELECT 1 FROM pg_views WHERE schemaname = '${db_schema}' AND viewname = 'patch_event'" # lint:ignore:140chars
 
   postgresql_psql { "apply ${db_schema} schema to ${db_name}":
     db      => $db_name,
