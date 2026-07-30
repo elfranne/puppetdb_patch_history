@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`version` and `checksum` are now required parameters of the example profile.** `version`
+  defaulted to `1.1.0` and `checksum` to `undef`, so a profile applied as shipped downloaded a
+  release nobody had chosen and verified it against nothing. A catalog that does not set both in
+  hiera now fails to compile:
+
+  ```yaml
+  profile::puppetdb_patch_history::version: '1.1.0'
+  profile::puppetdb_patch_history::checksum: '<sha512 from the release checksums file>'
+  ```
+
+  They are only correct as a pair — a checksum left behind by a version bump fails the `archive`
+  resource, which is the intended outcome.
+
 ### Fixed
 
 Three defects in the example manifests, all of which stopped Grafana reaching the archive. The

@@ -109,14 +109,21 @@ profile::puppetdb_patch_history::oncalendar: 'hourly'
 include profile::puppetdb_patch_history
 ```
 
-`grafana_certname` is the only parameter without a default — it is the certname of your Grafana
-node, and it must match the CN of the Puppet agent certificate that node presents.
+Those first three parameters have no defaults, so the catalog fails until all of them are in
+hiera. That is deliberate:
+
+- `grafana_certname` is the certname of your Grafana node, and it must match the CN of the Puppet
+  agent certificate that node presents.
+- `version` is not defaulted, so upgrading is something you decide rather than something a `git
+  pull` on this repo does to you.
+- `checksum` is not defaulted either, because a download verified against nothing is not verified.
+  It has to be paired with `version` anyway — the two are only correct together.
 
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `grafana_certname` | *(required)* | Certname of the Grafana node, mapped to `grafana_ro` |
-| `version` | `'1.1.0'` | Release to install, as the git tag reads (no `v` prefix) |
-| `checksum` | `undef` | SHA-512 of the release tarball |
+| `version` | *(required)* | Release to install, as the git tag reads (no `v` prefix) |
+| `checksum` | *(required)* | SHA-512 of the release tarball, from the release's checksums file |
 | `puppetdb_url` | `'http://localhost:8080'` | PuppetDB base URL |
 | `containing_class` | `'^Patching_as_code'` | Regex limiting the import to patch runs |
 | `db_name` | `'patch_history'` | Archive database name |
@@ -169,8 +176,10 @@ level=INFO msg=done runs_imported=274 runs_already_present=0
   PostgreSQL instance PuppetDB already runs on rather than standing up a second one. It also has
   to be in the catalog regardless, because the `postgresql::server::*` defined types read its
   class variables.
-- **Set `checksum`.** It is optional only so the example applies without editing. Pin it to the
-  SHA-512 from the release's checksums file for anything real.
+- **`version` and `checksum` are required, not defaulted.** An unverified download is not worth
+  having, and a `version` default would mean this file decides when your hosts upgrade. Requiring
+  both also keeps them in step: a stale checksum against a bumped version fails the `archive`
+  resource loudly, which is the desired outcome.
 - **`ProtectSystem=full`, not `strict`.** `strict` would mount `/run` read-only, where the
   PostgreSQL socket lives. `full` still protects `/usr`, `/boot`, and `/etc`.
 

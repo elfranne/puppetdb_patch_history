@@ -8,7 +8,9 @@
 # match wherever you put it. See INSTALL.md for the full walkthrough.
 #
 # @param version           Release to install, as the git tag reads. Tags carry no "v" prefix.
-# @param checksum          SHA-512 of the release tarball. Strongly recommended.
+# @param checksum          SHA-512 of the release tarball, from the release's checksums
+#   file. Required rather than optional: an unverified download is not verified, and the
+#   checksum is only correct paired with a particular $version.
 # @param puppetdb_url      Base URL of the PuppetDB instance to read from.
 # @param containing_class  Regex matched against containing_class, to archive only patch runs.
 # @param db_name           Name of the archive database.

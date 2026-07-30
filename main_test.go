@@ -269,6 +269,24 @@ func TestGrafanaDatasourceMatchesProfile(t *testing.T) {
 	}
 }
 
+// $version and $checksum are required on purpose: a download verified against nothing is
+// not verified, and a defaulted version would leave this repository deciding when a host
+// upgrades. They are also only correct as a pair, so a default on either is a regression.
+func TestReleaseParametersAreRequired(t *testing.T) {
+	pp := readFile(t, "example/puppetdb_patch_history.pp")
+
+	for _, param := range []string{"grafana_certname", "version", "checksum"} {
+		decl := regexp.MustCompile(`(?m)^\s+\S+\s+\$` + param + `\s*(=.*)?,$`).FindStringSubmatch(pp)
+		if decl == nil {
+			t.Errorf("the profile no longer declares a $%s parameter", param)
+			continue
+		}
+		if decl[1] != "" {
+			t.Errorf("$%s has a default (%s), but it must be required", param, strings.TrimSuffix(decl[1], ","))
+		}
+	}
+}
+
 // pg_hba is first-match-wins, and postgresql::server::config ships an 'allow access to
 // all users' rule at order 100: `host all all 0.0.0.0/0` with password auth, where
 // `host` matches SSL connections as well as plaintext ones. Ordered below that, the
