@@ -260,6 +260,19 @@ class profile::puppetdb_patch_history (
 
   # Mirrors puppetdb::database::postgresql_ssl_rules, which is how PuppetDB itself
   # reaches this PostgreSQL.
+  #
+  # The order is load-bearing. postgresql::server::config ships an 'allow access to all
+  # users' rule at order 100 - `host all all 0.0.0.0/0 <password auth>` - and `host`
+  # matches SSL connections as well as plaintext ones. pg_hba is first-match-wins, so
+  # anything ordered below that rule is unreachable: PostgreSQL answers with a password
+  # challenge and $grafana_user has no password by design. The symptom is
+  #
+  #   FATAL: password authentication failed for user "grafana_ro"
+  #   DETAIL: User "grafana_ro" has no password assigned.
+  #
+  # which reads like a credentials problem but is a rule that never matched. Keep these
+  # below 100 and above the module's own 001-004; the certificate is never even
+  # requested otherwise.
   postgresql::server::pg_hba_rule { "certificate access to ${db_name} as ${grafana_user} (ipv4)":
     description => 'Grafana read-only access, authenticated by Puppet CA client certificate',
     type        => 'hostssl',
@@ -268,7 +281,7 @@ class profile::puppetdb_patch_history (
     address     => '0.0.0.0/0',
     auth_method => 'cert',
     auth_option => "map=${grafana_map} clientcert=${grafana_clientcert}",
-    order       => 110,
+    order       => '010',
   }
 
   postgresql::server::pg_hba_rule { "certificate access to ${db_name} as ${grafana_user} (ipv6)":
@@ -279,7 +292,7 @@ class profile::puppetdb_patch_history (
     address     => '::0/0',
     auth_method => 'cert',
     auth_option => "map=${grafana_map} clientcert=${grafana_clientcert}",
-    order       => 111,
+    order       => '011',
   }
 
   postgresql::server::database_grant { "connect ${grafana_user} to ${db_name}":
@@ -298,13 +311,39 @@ class profile::puppetdb_patch_history (
     require     => Postgresql_psql["apply ${db_schema} schema to ${db_name}"],
   }
 
-  postgresql::server::grant { "select on ${db_schema} tables for ${grafana_user}":
-    privilege   => 'SELECT',
-    object_type => 'ALL TABLES IN SCHEMA',
-    object_name => $db_schema,
-    db          => $db_name,
-    role        => $grafana_user,
-    require     => Postgresql_psql["apply ${db_schema} schema to ${db_name}"],
+  # Deliberately not postgresql::server::grant. Its ALL TABLES IN SCHEMA idempotency
+  # check asks pg_tables which relations still lack the privilege, and pg_tables does
+  # not list views - so once patch_run and patch_package were granted, the GRANT stopped
+  # being issued and patch_event was never covered:
+  #
+  #   ERROR: permission denied for view patch_event
+  #
+  # Every panel in dashboard.json reads the view, so an archive that gained it by
+  # upgrade rather than at creation has a dashboard that cannot draw. This is the same
+  # GRANT - it does include views - probed against pg_class instead, so a view, matview
+  # or partitioned table added by a later schema change is picked up on the next run.
+  postgresql_psql { "select on ${db_schema} relations for ${grafana_user}":
+    db      => $db_name,
+    command => "GRANT SELECT ON ALL TABLES IN SCHEMA ${db_schema} TO \"${grafana_user}\"",
+    unless  => "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = '${db_schema}' AND c.relkind IN ('r', 'v', 'm', 'p') AND NOT has_table_privilege('${grafana_user}', c.oid, 'SELECT'))", # lint:ignore:140chars
+    require => [
+      Postgresql_psql["apply ${db_schema} schema to ${db_name}"],
+      Postgresql::Server::Role[$grafana_user],
+    ],
+  }
+
+  # Belt and braces with the grant above, and not a replacement for it: default
+  # privileges only apply to objects created after they are set, so this covers the
+  # next patch_event rather than the current one. Applied as postgres, which is the
+  # role that creates everything in this schema, so it needs no FOR ROLE clause.
+  postgresql_psql { "default select on ${db_schema} for ${grafana_user}":
+    db      => $db_name,
+    command => "ALTER DEFAULT PRIVILEGES IN SCHEMA ${db_schema} GRANT SELECT ON TABLES TO \"${grafana_user}\"",
+    unless  => "SELECT 1 FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace WHERE n.nspname = '${db_schema}' AND d.defaclobjtype = 'r' AND array_to_string(d.defaclacl, ',') LIKE '%${grafana_user}=r%'", # lint:ignore:140chars
+    require => [
+      Postgresql_psql["apply ${db_schema} schema to ${db_name}"],
+      Postgresql::Server::Role[$grafana_user],
+    ],
   }
 
   # Staging for the download, not an install location: /var/cache is where the FHS puts

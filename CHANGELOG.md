@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+Three defects in the example manifests, all of which stopped Grafana reaching the archive. The
+importer and the schema are unchanged, so the binary does not need upgrading for any of these —
+but `example/puppetdb_patch_history.pp` has to be re-copied into your control repo.
+
+- The `pg_hba` rules granting `grafana_ro` certificate access were ordered `110`/`111`, below
+  `postgresql::server::config`'s `allow access to all users` rule at order 100. That rule is
+  `host all all 0.0.0.0/0` with password authentication, `host` matches SSL connections too, and
+  `pg_hba` is first-match-wins — so the certificate rules were unreachable and every connection
+  was met with `password authentication failed for user "grafana_ro"` against a role that has no
+  password by design. They are now `010`/`011`.
+- `grafana_ro` was never granted `SELECT` on the `patch_event` view, so every panel in
+  `example/dashboard.json` failed with `permission denied for view patch_event` on any archive
+  that gained the view by upgrade. `postgresql::server::grant`'s `ALL TABLES IN SCHEMA` check
+  reads `pg_tables`, which excludes views, so the grant stopped being issued once the two tables
+  had it. Replaced with a `postgresql_psql` resource that probes `pg_class`.
+- `ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES` for `grafana_ro`, documented in
+  `example/INSTALL.md` since 1.1.0 but never actually present in the profile. Its absence is what
+  left the view unreadable. Now applied, with a test tying the claim to the resource.
+
 ## [1.1.0] - 2026-07-30
 
 Records the version a patch actually installed. A resource event carries the value from the
