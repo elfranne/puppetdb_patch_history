@@ -24,8 +24,8 @@
 # @param grafana_clientcert pg_hba clientcert mode; use '1' on PostgreSQL < 12.
 class profile::puppetdb_patch_history (
   String[1]            $grafana_certname,
-  String[1]            $version            = '1.1.0',
-  Optional[String[1]]  $checksum           = undef,
+  String[1]            $version,
+  String[1]            $checksum,
   Stdlib::HTTPUrl      $puppetdb_url       = 'http://localhost:8080',
   String[1]            $containing_class   = '^Patching_as_code',
   String[1]            $db_name            = 'patch_history',
